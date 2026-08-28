@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: review-pr [options] <number|github-pr-url>
+       review-pr [options] --close <number|github-pr-url>
+
+Creates a dedicated Herdr workspace for a GitHub pull request:
+  - an isolated <repo>/.worktrees/pr-<number>-review checkout
+  - Hunk displaying the PR base...HEAD diff
+  - a read-only reviewer pane
+
+Options:
+  --agent-kind KIND  reviewer kind: claude, omp, pi, opencode, or copilot
+  --kind KIND        alias for --agent-kind
+  --review-skill PATH  review standards file or directory containing SKILL.md
+  --fresh            refresh the existing review worktree
+  --close            close the review workspace and remove its clean worktree
+
+HUNK_REVIEW_AGENT_KIND sets the default reviewer kind (default: claude).
+HUNK_REVIEW_SKILL sets default custom review standards.
+Accepted GitHub URLs use the form https://github.com/<owner>/<repo>/pull/<number>.
+EOF
+}
+
+fail() {
+  printf 'review-pr: %s\n' "$*" >&2
+  exit 1
+}
+
+parse_pr_reference() {
+  local reference=$1
+
+  url_repo=
+  if [[ $reference =~ ^[0-9]+$ ]]; then
+    pr=$reference
+  elif [[ $reference =~ ^https://github\.com/([^/]+)/([^/]+)/pull/([0-9]+)/?([?#].*)?$ ]]; then
+    url_repo="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+    pr="${BASH_REMATCH[3]}"
+  else
+    return 1
+  fi
+}
+mode=open
+fresh=false
+agent_kind=${HUNK_REVIEW_AGENT_KIND:-claude}
+review_skill=${HUNK_REVIEW_SKILL:-}
+reference=
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --fresh) fresh=true; shift ;;
+    --close) mode=close; shift ;;
+    --agent-kind|--kind)
+      [[ $# -ge 2 ]] || { usage >&2; exit 2; }
+      agent_kind=$2; shift 2 ;;
+    --review-skill)
+      [[ $# -ge 2 ]] || { usage >&2; exit 2; }
+      review_skill=$2; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    -*) usage >&2; exit 2 ;;
+    *) [[ -z $reference ]] || { usage >&2; exit 2; }; reference=$1; shift ;;
+  esac
+done
+[[ -n $reference ]] && parse_pr_reference "$reference" || { usage >&2; exit 2; }
+case $agent_kind in
+  claude|omp|pi|opencode|copilot) ;;
+  *) fail "unsupported agent kind: $agent_kind" ;;
+esac
+
+review_instructions=
+if [[ -n $review_skill ]]; then
+  if [[ -d $review_skill ]]; then review_skill="$review_skill/SKILL.md"; fi
+  [[ -f $review_skill ]] || fail "review skill not found: $review_skill"
+  review_instructions=$(cat "$review_skill")
+fi
+for command in git herdr python3; do
+  command -v "$command" >/dev/null 2>&1 || fail "missing required command: $command"
+done
+
+if [[ $mode == open ]]; then
+  for command in gh hunk; do
+    command -v "$command" >/dev/null 2>&1 || fail "missing required command: $command"
+  done
+fi
+
+root=$(git rev-parse --show-toplevel) || fail 'run inside a Git repository'
+worktree="$root/.worktrees/pr-$pr-review"
+
+if [[ $mode == open ]]; then
+  repo=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+  [[ -z $url_repo || $url_repo == "$repo" ]] || fail "GitHub URL repository $url_repo does not match the current repository $repo"
+  metadata=$(gh pr view "$pr" --repo "$repo" --json baseRefName)
+  base=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["baseRefName"])' <<<"$metadata")
+fi
+
+if [[ $mode == close ]]; then
+  [[ -d $worktree ]] || fail "review worktree does not exist: $worktree"
+  [[ -z $(git -C "$worktree" status --porcelain) ]] || fail "refusing to remove dirty worktree: $worktree"
+
+  workspaces=$(herdr workspace list)
+  workspace=$(python3 -c 'import json, sys; pr = sys.argv[1]; print(next((workspace["workspace_id"] for workspace in json.load(sys.stdin)["result"]["workspaces"] if workspace.get("label") == f"PR #{pr} review"), ""))' "$pr" <<<"$workspaces")
+
+  git -C "$root" worktree remove "$worktree"
+  if [[ -n $workspace ]]; then
+    herdr workspace close "$workspace"
+  fi
+
+  printf 'Closed review PR #%s and removed %s\n' "$pr" "$worktree"
+  exit 0
+fi
+
+if [[ -e $worktree ]]; then
+  git -C "$worktree" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "$worktree exists but is not a Git worktree"
+
+  if [[ $fresh == true ]]; then
+    [[ -z $(git -C "$worktree" status --porcelain) ]] || fail "refusing to refresh dirty worktree: $worktree"
+    git -C "$root" fetch origin "$base" "pull/$pr/head:refs/pr/$pr"
+    git -C "$worktree" reset --hard "refs/pr/$pr"
+  fi
+else
+  git -C "$root" fetch origin "$base" "pull/$pr/head:refs/pr/$pr"
+  mkdir -p "${worktree%/*}"
+  git -C "$root" worktree add --detach "$worktree" "refs/pr/$pr"
+fi
+
+workspace_json=$(herdr workspace create --cwd "$worktree" --label "PR #$pr review" --no-focus)
+workspace=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["workspace"]["workspace_id"])' <<<"$workspace_json")
+herdr pane run "$hunk_pane" "exec hunk diff 'origin/$base...HEAD' --mode split --sidebar --agent-notes"
+agent="pr-$pr-review"
+agent_pane_json=$(herdr pane split --pane "$hunk_pane" --direction right --cwd "$worktree" --no-focus)
+agent_pane=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])' <<<"$agent_pane_json")
+herdr pane send-keys "$agent_pane" enter
+herdr agent start "$agent" --kind "$agent_kind" --pane "$agent_pane" --timeout 30000
+
+prompt=$(cat <<EOF
+Review GitHub PR #$pr in $worktree.
+
+Scope: origin/$base...HEAD only.
+${review_instructions:+Apply these additional review standards:
+
+$review_instructions
+}
+Review correctness, regressions, async/state safety, network/queue conventions, and tests. Ignore style-only issues.
+
+Use the active Hunk session as the review surface:
+1. Inspect hunk session review --repo '$worktree' --json.
+2. Read raw patches only for candidate files.
+3. Add only evidence-backed findings with hunk session comment add or one comment apply batch.
+4. Navigate Hunk to each finding; focus/highlight only when useful.
+5. Do not edit files, commit, push, or post to GitHub.
+
+Return two sections:
+- Actionable findings: severity, file:line, failure scenario, and remediation. Add only these to Hunk.
+- Minor improvements (not added to Hunk): non-blocking cleanup or targeted coverage hardening, each with file:line, rationale, and remediation. Exclude cosmetic style preferences and do not invent failure scenarios.
+
+If either section has no items, say so explicitly.
+EOF
+)
+herdr agent prompt "$agent" "$prompt"
+herdr workspace focus "$workspace"
+
+printf 'Review PR #%s in %s\n' "$pr" "$worktree"

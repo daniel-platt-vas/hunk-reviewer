@@ -1,0 +1,16 @@
+{
+  "name": "hunk-reviewer",
+  "version": "0.1.0",
+  "description": "Portable Hunk pull-request review tooling for multiple coding agents.",
+  "type": "module",
+  "bin": {
+    "hunk-reviewer": "./bin/hunk-reviewer.ts",
+    "review-pr": "./bin/review-pr"
+  },
+  "scripts": {
+    "dev": "bun run bin/hunk-reviewer.ts",
+    "test": "bun test"
+  },
+  "engines": { "bun": ">=1.1" },
+  "license": "MIT"
+}
