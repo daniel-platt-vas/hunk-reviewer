@@ -31,7 +31,10 @@ fail() {
 if [[ ${1:-} == watch ]]; then
   shift
   script_path=$0
-  if [[ -L $script_path ]]; then script_path="$(dirname "$script_path")/$(readlink "$script_path")"; fi
+  if [[ -L $script_path ]]; then
+    link_target=$(readlink "$script_path")
+    if [[ $link_target == /* ]]; then script_path=$link_target; else script_path="$(dirname "$script_path")/$link_target"; fi
+  fi
   watcher="$(cd "$(dirname "$script_path")/.." && pwd)/src/comment-watch.ts"
   if [[ ${1:-} =~ ^[0-9]+$ ]]; then
     pr=$1; shift
