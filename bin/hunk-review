@@ -148,6 +148,8 @@ fi
 
 workspace_json=$(herdr workspace create --cwd "$worktree" --label "PR #$pr review" --no-focus)
 workspace=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["workspace"]["workspace_id"])' <<<"$workspace_json")
+hunk_pane=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])' <<<"$workspace_json")
+
 herdr pane run "$hunk_pane" "exec hunk diff 'origin/$base...HEAD' --mode split --sidebar --agent-notes"
 agent="pr-$pr-review"
 agent_pane_json=$(herdr pane split --pane "$hunk_pane" --direction right --cwd "$worktree" --no-focus)
