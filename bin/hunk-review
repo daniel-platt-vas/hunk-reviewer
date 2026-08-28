@@ -3,23 +3,22 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: review-pr [options] <number|github-pr-url>
-       review-pr [options] --close <number|github-pr-url>
+Usage: hunk-review <start|watch|close> [options] <number|github-pr-url>
 
-Creates a dedicated Herdr workspace for a GitHub pull request:
-  - an isolated <repo>/.worktrees/pr-<number>-review checkout
-  - Hunk displaying the PR base...HEAD diff
-  - a read-only reviewer pane
+Subcommands:
+  start             create Hunk workspace and start a reviewer
+  watch             dispatch new Hunk comments to a command
+  close             close the review workspace and remove its clean worktree
 
-Options:
+Start options:
   --agent-kind KIND  reviewer kind: claude, omp, pi, opencode, or copilot
   --kind KIND        alias for --agent-kind
   --review-skill PATH  review standards file or directory containing SKILL.md
   --fresh            refresh the existing review worktree
-  --close            close the review workspace and remove its clean worktree
 
 HUNK_REVIEW_AGENT_KIND sets the default reviewer kind (default: claude).
 HUNK_REVIEW_SKILL sets default custom review standards.
+See `hunk-review watch --help` for watcher options.
 Accepted GitHub URLs use the form https://github.com/<owner>/<repo>/pull/<number>.
 EOF
 }
@@ -29,6 +28,21 @@ fail() {
   exit 1
 }
 
+if [[ ${1:-} == watch ]]; then
+  shift
+  script_path=$0
+  if [[ -L $script_path ]]; then
+    script_path="$(dirname "$script_path")/$(readlink "$script_path")"
+  fi
+  exec bun "$(cd "$(dirname "$script_path")/.." && pwd)/src/comment-watch.ts" "$@"
+fi
+subcommand=${1:-start}
+if [[ $subcommand == start || $subcommand == close ]]; then
+  [[ $# -gt 0 ]] && shift
+else
+  usage >&2
+  exit 2
+fi
 parse_pr_reference() {
   local reference=$1
 
@@ -42,7 +56,7 @@ parse_pr_reference() {
     return 1
   fi
 }
-mode=open
+mode=$subcommand
 fresh=false
 agent_kind=${HUNK_REVIEW_AGENT_KIND:-claude}
 review_skill=${HUNK_REVIEW_SKILL:-}
