@@ -24,7 +24,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '-h' || arg === '--help') { usage(); process.exit(0); }
     if (arg === '--no-baseline') { args.baseline = false; continue; }
-    const key = { '--repo': 'repo', '--command': 'command', '--agent-target': 'agentTarget', '--interval': 'intervalMs', '--state-file': 'stateFile' }[arg];
+    if (arg === '--once') { args.once = true; continue; }
     if (!key || i + 1 >= argv.length) throw new Error(`invalid option: ${arg}`);
     args[key] = key === 'intervalMs' ? Number(argv[++i]) : argv[++i];
   }
