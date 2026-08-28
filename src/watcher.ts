@@ -32,14 +32,25 @@ export function dispatch(command, comment) {
   });
 }
 
-export async function poll({ hunk, repo, command, stateFile, baseline, logger = console }) {
+export function dispatchToAgent(target, comment) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('herdr', ['agent', 'prompt', target, JSON.stringify(comment)], { stdio: 'inherit' });
+    child.once('error', reject);
+    child.once('exit', (code, signal) => code === 0
+      ? resolve()
+      : reject(new Error(`agent dispatch exited ${code ?? `with ${signal}`}`)));
+  });
+}
+
+export async function poll({ hunk, repo, command, agentTarget, stateFile, baseline, logger = console }) {
   const comments = await readUserComments({ hunk, repo });
   const seen = await loadState(stateFile);
   if (baseline && seen.size === 0) comments.forEach(comment => seen.add(comment.id));
 
   for (const comment of comments) {
     if (!comment.id || seen.has(comment.id)) continue;
-    await dispatch(command, comment);
+    if (agentTarget) await dispatchToAgent(agentTarget, comment);
+    else await dispatch(command, comment);
     seen.add(comment.id);
     logger.info(`Dispatched Hunk comment ${comment.id}`);
   }

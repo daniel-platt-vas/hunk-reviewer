@@ -53,16 +53,21 @@ Or set `HUNK_REVIEW_SKILL`. Custom standards are added to the baseline scope and
 
 ## Watch Hunk comments
 
-Dispatch each new human-authored Hunk comment as JSON to any command:
+For a review started by `hunk-review start`, run this from the primary checkout:
 
 ```sh
-hunk-review watch \
-  --repo /path/to/review-worktree \
-  --command 'my-reviewer --repo /path/to/review-worktree'
+hunk-review watch 1704
+```
+
+This automatically finds `.worktrees/pr-1704-review` and sends new Hunk comments to the `pr-1704-review` agent. It does not require knowing the worktree path or reviewer command.
+
+For custom integrations, use the explicit adapter form:
+
+```sh
+hunk-review watch --repo /path/to/review-worktree --command 'my-reviewer --repo /path/to/review-worktree'
 ```
 
 The command receives one comment object on stdin. Successful exit marks it handled; failures are retried. Use `--no-baseline`, `--once`, `--interval`, and `--state-file` as needed. Comments are filtered with `--type user` to prevent feedback loops.
-
 ## Included skills
 
 - `hunk-review`: Hunk session inspection, navigation, comments, and highlights.
